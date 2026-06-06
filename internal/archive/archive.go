@@ -1,12 +1,12 @@
-// Package archive は config・レイヤー・manifest.json を
-// docker-archive 形式の単一 tar にまとめる。
-// 出力した tar は `docker load` / `podman load` で読み込める。
+// Package archive bundles the config, layers, and manifest.json into a
+// single docker-archive tar. The resulting tar can be read by
+// `docker load` / `podman load`.
 //
-// tar 内のレイアウト:
+// Layout inside the tar:
 //
 //	<config-hex>.json        … OCI Image Config
-//	<layer-hex>/layer.tar    … 非圧縮レイヤー(複数可)
-//	manifest.json            … 上2つを参照するインデックス
+//	<layer-hex>/layer.tar    … uncompressed layer (one or more)
+//	manifest.json            … index referencing the two above
 package archive
 
 import (
@@ -23,21 +23,21 @@ import (
 
 var epoch = time.Unix(0, 0).UTC()
 
-// WriteDockerArchive は docker-archive 形式の tar を w に書き出す。
+// WriteDockerArchive writes a docker-archive format tar to w.
 //
-//   - cfgData    : image.Config.Marshal() が返した JSON bytes
-//   - cfgHex     : 同上の digest(16進)。config ファイル名に使う
-//   - layers     : 下位→上位の順に並べたレイヤー
-//   - repoTags   : 例 []string{"toyimg:latest"}
+//   - cfgData  : the JSON bytes returned by image.Config.Marshal()
+//   - cfgHex   : its digest (hex); used as the config file name
+//   - layers   : layers ordered lowest -> highest
+//   - repoTags : e.g. []string{"toyimg:latest"}
 func WriteDockerArchive(w io.Writer, cfgData []byte, cfgHex string, layers []*layer.Layer, repoTags []string) error {
 	tw := tar.NewWriter(w)
 
 	configName := cfgHex + ".json"
 
-	// レイヤーを書き出しつつ、manifest 用のパス一覧を作る。
+	// Write the layers and collect the path list for the manifest.
 	layerPaths := make([]string, len(layers))
 	for i, l := range layers {
-		// 非圧縮なので layer.tar の digest == diff_id。ディレクトリ名に流用する。
+		// Uncompressed, so the layer.tar digest == diff_id. Reuse it as the directory name.
 		hexID := strings.TrimPrefix(l.DiffID, "sha256:")
 		path := hexID + "/layer.tar"
 		layerPaths[i] = path
@@ -66,7 +66,7 @@ func WriteDockerArchive(w io.Writer, cfgData []byte, cfgHex string, layers []*la
 	return tw.Close()
 }
 
-// addFile は1つの通常ファイルを tar に追加する。mtime は固定。
+// addFile adds a single regular file to the tar. mtime is pinned.
 func addFile(tw *tar.Writer, name string, data []byte) error {
 	hdr := &tar.Header{
 		Name:    name,

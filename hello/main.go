@@ -1,6 +1,7 @@
-// Command hello は検証用の最小プログラム。
-// CGO_ENABLED=0 で静的リンクすれば共有ライブラリ不要になり、
-// rootfs に1ファイル置くだけで `FROM scratch` 相当のイメージが動く。
+// Command hello is a tiny program used for verification.
+// Linking it statically with CGO_ENABLED=0 removes the need for shared
+// libraries, so dropping a single file into a rootfs yields a runnable
+// `FROM scratch`-equivalent image.
 package main
 
 import (

@@ -1,8 +1,7 @@
-// Command toy-build-oci は rootfs ディレクトリから
-// docker/podman load 可能な OCI イメージ(docker-archive tar)を生成する
-// 最小の CLI。
+// Command toy-build-oci is a minimal CLI that produces an OCI image
+// (a docker-archive tar loadable by docker/podman) from a rootfs directory.
 //
-// 使い方:
+// Usage:
 //
 //	toy-build-oci build --from-dir ./testdata/rootfs --tag toyimg:latest \
 //	    --cmd /hello -o out.tar
@@ -40,25 +39,25 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `toy-build-oci - 最小のOCIイメージビルダー
+	fmt.Fprint(os.Stderr, `toy-build-oci - a minimal OCI image builder
 
-使い方:
+Usage:
   toy-build-oci build [flags]
 
 build flags:
-  --from-dir DIR     レイヤーにするrootfsディレクトリ (必須)
-  --tag NAME:TAG     イメージのタグ (default: toyimg:latest)
-  --cmd ARG          コンテナのCmd (繰り返し指定可)
-  --env KEY=VAL      環境変数 (繰り返し指定可)
-  --entrypoint ARG   Entrypoint (繰り返し指定可)
-  --workdir DIR      作業ディレクトリ
-  --arch ARCH        アーキテクチャ (default: 実行環境のGOARCH)
+  --from-dir DIR     rootfs directory to turn into a layer (required)
+  --tag NAME:TAG     image tag (default: toyimg:latest)
+  --cmd ARG          container Cmd (repeatable)
+  --env KEY=VAL      environment variable (repeatable)
+  --entrypoint ARG   Entrypoint (repeatable)
+  --workdir DIR      working directory
+  --arch ARCH        architecture (default: host GOARCH)
   --os OS            OS (default: linux)
-  -o FILE            出力tarのパス (default: out.tar)
+  -o FILE            output tar path (default: out.tar)
 `)
 }
 
-// stringSlice は同じフラグを繰り返し指定できるようにする(--cmd a --cmd b)。
+// stringSlice lets the same flag be given repeatedly (--cmd a --cmd b).
 type stringSlice []string
 
 func (s *stringSlice) String() string     { return fmt.Sprint([]string(*s)) }
@@ -67,33 +66,33 @@ func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 func runBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	var (
-		fromDir    = fs.String("from-dir", "", "レイヤーにするrootfsディレクトリ")
-		tag        = fs.String("tag", "toyimg:latest", "イメージのタグ")
-		workdir    = fs.String("workdir", "", "作業ディレクトリ")
-		arch       = fs.String("arch", runtime.GOARCH, "アーキテクチャ")
+		fromDir    = fs.String("from-dir", "", "rootfs directory to turn into a layer")
+		tag        = fs.String("tag", "toyimg:latest", "image tag")
+		workdir    = fs.String("workdir", "", "working directory")
+		arch       = fs.String("arch", runtime.GOARCH, "architecture")
 		osName     = fs.String("os", "linux", "OS")
-		out        = fs.String("o", "out.tar", "出力tarのパス")
+		out        = fs.String("o", "out.tar", "output tar path")
 		cmd        stringSlice
 		env        stringSlice
 		entrypoint stringSlice
 	)
-	fs.Var(&cmd, "cmd", "コンテナのCmd(繰り返し可)")
-	fs.Var(&env, "env", "環境変数 KEY=VAL(繰り返し可)")
-	fs.Var(&entrypoint, "entrypoint", "Entrypoint(繰り返し可)")
+	fs.Var(&cmd, "cmd", "container Cmd (repeatable)")
+	fs.Var(&env, "env", "environment variable KEY=VAL (repeatable)")
+	fs.Var(&entrypoint, "entrypoint", "Entrypoint (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *fromDir == "" {
-		return fmt.Errorf("--from-dir は必須です")
+		return fmt.Errorf("--from-dir is required")
 	}
 
-	// 1. rootfs → 非圧縮レイヤーtar + diff_id
+	// 1. rootfs -> uncompressed layer tar + diff_id
 	l, err := layer.FromDir(*fromDir)
 	if err != nil {
-		return fmt.Errorf("レイヤー生成: %w", err)
+		return fmt.Errorf("build layer: %w", err)
 	}
 
-	// 2. Image Config を組み立てる
+	// 2. Assemble the Image Config.
 	cfg := &image.Config{
 		Architecture: *arch,
 		OS:           *osName,
@@ -113,23 +112,23 @@ func runBuild(args []string) error {
 	}
 	cfgData, cfgHex, err := cfg.Marshal()
 	if err != nil {
-		return fmt.Errorf("config生成: %w", err)
+		return fmt.Errorf("build config: %w", err)
 	}
 
-	// 3. docker-archive tar として書き出す
+	// 3. Write it out as a docker-archive tar.
 	f, err := os.Create(*out)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	if err := archive.WriteDockerArchive(f, cfgData, cfgHex, []*layer.Layer{l}, []string{*tag}); err != nil {
-		return fmt.Errorf("tar書き出し: %w", err)
+		return fmt.Errorf("write tar: %w", err)
 	}
 
 	fmt.Printf("built %s\n", *tag)
 	fmt.Printf("  layer diff_id : %s\n", l.DiffID)
 	fmt.Printf("  config digest : sha256:%s\n", cfgHex)
 	fmt.Printf("  output        : %s\n", *out)
-	fmt.Printf("\n読み込み: docker load -i %s\n", *out)
+	fmt.Printf("\nload with: docker load -i %s\n", *out)
 	return nil
 }

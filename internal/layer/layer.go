@@ -1,6 +1,7 @@
-// Package layer はディレクトリをOCIイメージの「レイヤー」(非圧縮tar)へ
-// 変換する。レイヤーのdigestはコンテンツアドレッシングの根幹なので、
-// 再現可能(deterministic)になるよう tar ヘッダを正規化する点が肝。
+// Package layer converts a directory into an OCI image "layer" (an
+// uncompressed tar). A layer's digest is the foundation of content
+// addressing, so the key concern here is making it reproducible
+// (deterministic) by normalizing the tar headers.
 package layer
 
 import (
@@ -17,30 +18,31 @@ import (
 	"time"
 )
 
-// epoch は ModTime を固定するための基準時刻(1970-01-01)。
-// これにより同じ入力からは常に同じ digest が得られる。
-// BuildKit の SOURCE_DATE_EPOCH に相当する考え方。
+// epoch is the fixed reference time (1970-01-01) used for ModTime.
+// With it, the same input always yields the same digest.
+// This mirrors BuildKit's SOURCE_DATE_EPOCH idea.
 var epoch = time.Unix(0, 0).UTC()
 
-// Layer は単一の非圧縮レイヤーtarと、その diff_id を保持する。
+// Layer holds a single uncompressed layer tar and its diff_id.
 //
-// diff_id は「非圧縮」tarの sha256。OCI Image Config の rootfs.diff_ids に
-// 入る値で、圧縮形式に依存しないレイヤーの同一性を表す。
+// diff_id is the sha256 of the *uncompressed* tar. It is the value stored
+// in the OCI Image Config's rootfs.diff_ids and expresses layer identity
+// independently of the compression format.
 type Layer struct {
-	TarBytes []byte // 非圧縮レイヤーtarの中身
+	TarBytes []byte // contents of the uncompressed layer tar
 	DiffID   string // "sha256:<hex>"
 }
 
-// FromDir は srcDir 配下のファイル群を1つの非圧縮tarレイヤーにまとめる。
+// FromDir packs the files under srcDir into a single uncompressed tar layer.
 //
-// 再現性のため以下を正規化する:
-//   - エントリをパス名でソート
-//   - uid/gid=0, uname/gname=空
-//   - mtime を epoch に固定
+// It normalizes the following for reproducibility:
+//   - entries sorted by path name
+//   - uid/gid=0, uname/gname empty
+//   - mtime pinned to epoch
 func FromDir(srcDir string) (*Layer, error) {
 	type entry struct {
-		path string // 実ファイルへのパス
-		name string // tar内での名前(srcDir基準・スラッシュ区切り)
+		path string // path to the actual file
+		name string // name inside the tar (relative to srcDir, slash-separated)
 		info fs.FileInfo
 	}
 
@@ -50,7 +52,7 @@ func FromDir(srcDir string) (*Layer, error) {
 			return err
 		}
 		if p == srcDir {
-			return nil // ルートディレクトリ自体はエントリにしない
+			return nil // do not emit an entry for the root directory itself
 		}
 		rel, err := filepath.Rel(srcDir, p)
 		if err != nil {
@@ -90,7 +92,7 @@ func FromDir(srcDir string) (*Layer, error) {
 		if e.info.IsDir() {
 			hdr.Name += "/"
 		}
-		// digest を再現可能にするための正規化
+		// Normalize so the digest is reproducible.
 		hdr.Uid, hdr.Gid = 0, 0
 		hdr.Uname, hdr.Gname = "", ""
 		hdr.ModTime = epoch

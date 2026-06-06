@@ -1,6 +1,6 @@
-// Package image は OCI Image Config と、docker-archive 形式の
-// manifest.json を組み立てる。ここで「設定」と「レイヤー」が
-// digest で結びつけられる様子が、イメージの本質。
+// Package image assembles the OCI Image Config and the docker-archive
+// manifest.json. This is where the "config" and the "layers" get tied
+// together by digest, which is the essence of an image.
 package image
 
 import (
@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 )
 
-// Config は OCI Image Config の最小サブセット。
-// 実際のフィールドはもっと多いが、動かすのに必要な分だけ定義する。
+// Config is a minimal subset of the OCI Image Config.
+// The real spec has many more fields; only what is needed to run is defined.
 type Config struct {
 	Architecture string    `json:"architecture"`
 	OS           string    `json:"os"`
@@ -19,8 +19,8 @@ type Config struct {
 	History      []History `json:"history,omitempty"`
 }
 
-// RunConfig はコンテナ実行時の振る舞い(Cmd/Env等)。
-// JSONキーが大文字始まりなのは Docker/OCI の慣習に合わせるため。
+// RunConfig is the runtime behavior of the container (Cmd/Env/etc).
+// The JSON keys are capitalized to match the Docker/OCI convention.
 type RunConfig struct {
 	Env        []string `json:"Env,omitempty"`
 	Cmd        []string `json:"Cmd,omitempty"`
@@ -28,21 +28,22 @@ type RunConfig struct {
 	WorkingDir string   `json:"WorkingDir,omitempty"`
 }
 
-// RootFS はレイヤーの積層を diff_id の並びで表す。
+// RootFS expresses the stack of layers as an ordered list of diff_ids.
 type RootFS struct {
-	Type    string   `json:"type"`     // 常に "layers"
-	DiffIDs []string `json:"diff_ids"` // 下位→上位の順(非圧縮tarのsha256)
+	Type    string   `json:"type"`     // always "layers"
+	DiffIDs []string `json:"diff_ids"` // lowest -> highest (sha256 of uncompressed tar)
 }
 
-// History は各レイヤーの由来を記録する(任意項目)。
+// History records the provenance of each layer (optional).
 type History struct {
 	CreatedBy  string `json:"created_by,omitempty"`
 	EmptyLayer bool   `json:"empty_layer,omitempty"`
 }
 
-// Marshal は Config を JSON 化し、その内容の digest(config digest)を返す。
-// 返した bytes はそのまま tar に書き込む必要がある(digest は内容のハッシュなので、
-// 再シリアライズすると値がずれる可能性があるため)。
+// Marshal serializes the Config to JSON and returns the digest of its
+// contents (the config digest). The returned bytes must be written to the
+// tar as-is: the digest is a hash of the contents, so re-serializing could
+// change the value.
 func (c *Config) Marshal() (data []byte, digestHex string, err error) {
 	data, err = json.Marshal(c)
 	if err != nil {
@@ -52,12 +53,12 @@ func (c *Config) Marshal() (data []byte, digestHex string, err error) {
 	return data, hex.EncodeToString(sum[:]), nil
 }
 
-// DockerManifest は docker-archive(`docker save`クラシック形式)の
-// manifest.json。配列の各要素が1イメージを表す。
+// DockerManifest is the manifest.json of the docker-archive
+// (the classic `docker save` format). Each array element is one image.
 type DockerManifest []DockerManifestEntry
 
 type DockerManifestEntry struct {
-	Config   string   `json:"Config"`   // tar内のconfigファイルへのパス
-	RepoTags []string `json:"RepoTags"` // 例: ["toyimg:latest"]
-	Layers   []string `json:"Layers"`   // tar内の各layer.tarへのパス(下位→上位)
+	Config   string   `json:"Config"`   // path to the config file inside the tar
+	RepoTags []string `json:"RepoTags"` // e.g. ["toyimg:latest"]
+	Layers   []string `json:"Layers"`   // paths to each layer.tar inside the tar (lowest -> highest)
 }

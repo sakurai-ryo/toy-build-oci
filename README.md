@@ -1,20 +1,20 @@
 # toy-build-oci
 
-OCIイメージの作られ方を理解するための、最小のイメージビルダー CLI（Go製）。
-rootfs ディレクトリから **`docker load` / `podman load` 可能な tar**（docker-archive 形式）を生成する。
+A minimal OCI image builder CLI (written in Go), built to understand how container images are actually assembled.
+It produces a **`docker load` / `podman load`-able tar** (docker-archive format) from a rootfs directory.
 
-## クイックスタート
+## Quick start
 
 ```sh
 make run
-# => 自作ビルダーでイメージを作り、docker load → docker run まで実行し
-#    "hello from toy-build-oci" を出力する
+# => builds an image with the toy builder, runs docker load -> docker run,
+#    and prints "hello from toy-build-oci"
 ```
 
-手動で実行する場合:
+Run it manually:
 
 ```sh
-make build hello                                  # CLIと検証用helloを用意
+make build hello                                  # build the CLI and the test "hello" binary
 ./bin/toy-build-oci build \
     --from-dir ./testdata/rootfs \
     --tag toyimg:latest \
@@ -28,54 +28,56 @@ docker run --rm toyimg:latest
 ```
 toy-build-oci build [flags]
 
-  --from-dir DIR     レイヤーにするrootfsディレクトリ (必須)
-  --tag NAME:TAG     イメージのタグ (default: toyimg:latest)
-  --cmd ARG          コンテナのCmd (繰り返し可)
-  --env KEY=VAL      環境変数 (繰り返し可)
-  --entrypoint ARG   Entrypoint (繰り返し可)
-  --workdir DIR      作業ディレクトリ
-  --arch ARCH        アーキテクチャ (default: 実行環境のGOARCH)
+  --from-dir DIR     rootfs directory to turn into a layer (required)
+  --tag NAME:TAG     image tag (default: toyimg:latest)
+  --cmd ARG          container Cmd (repeatable)
+  --env KEY=VAL      environment variable (repeatable)
+  --entrypoint ARG   Entrypoint (repeatable)
+  --workdir DIR      working directory
+  --arch ARCH        architecture (default: host GOARCH)
   --os OS            OS (default: linux)
-  -o FILE            出力tarのパス (default: out.tar)
+  -o FILE            output tar path (default: out.tar)
 ```
 
-## 仕組み（OCIイメージの構成要素）
+## How it works (the pieces of an OCI image)
 
 ```
 rootfs/ ──tar──► layer.tar ──sha256──► diff_id ─┐
-                                                ├─► Image Config(JSON) ─sha256─► config digest
+                                                ├─► Image Config (JSON) ─sha256─► config digest
 Cmd/Env/Arch ───────────────────────────────────┘
                                                           │
                                                           ▼
-                                            manifest.json が config と layers を参照
+                                  manifest.json references the config and layers
 ```
 
-生成される tar のレイアウト（docker-archive 形式）:
+Layout of the generated tar (docker-archive format):
 
 ```
 <config-hex>.json        … OCI Image Config
-<layer-hex>/layer.tar    … 非圧縮レイヤー
-manifest.json            … 上2つを参照するインデックス
+<layer-hex>/layer.tar    … uncompressed layer
+manifest.json            … index referencing the two above
 ```
 
-- **diff_id** は「非圧縮」レイヤーtarの sha256。圧縮形式に依存しないレイヤー同一性を表す。
-- tarヘッダの mtime/uid/gid を正規化しているため、同じ入力からは **常に同じ digest**（再現可能ビルド）になる。
+- **diff_id** is the sha256 of the *uncompressed* layer tar. It expresses layer identity
+  independently of the compression format.
+- The tar header's mtime/uid/gid are normalized, so the same input always yields the
+  **same digest** (reproducible builds).
 
-## コード構成
+## Code layout
 
-| パス | 役割 |
-|------|------|
-| `cmd/toy-build-oci` | CLI（フラグ解析） |
-| `internal/layer`    | ディレクトリ→非圧縮tar、diff_id算出 |
-| `internal/image`    | OCI Image Config / manifest.json 構築 |
-| `internal/archive`  | docker-archive tar の書き出し |
-| `hello/`            | 検証用の静的リンクバイナリ |
+| Path | Responsibility |
+|------|----------------|
+| `cmd/toy-build-oci` | CLI (flag parsing) |
+| `internal/layer`    | directory → uncompressed tar, diff_id computation |
+| `internal/image`    | OCI Image Config / manifest.json assembly |
+| `internal/archive`  | docker-archive tar writer |
+| `hello/`            | statically linked binary used for verification |
 
-## ロードマップ
+## Roadmap
 
-- [x] **M1** 単一レイヤー → docker-archive tar → `docker load`/`docker run`
-- [x] M2 Cmd/Env/Entrypoint/WorkingDir をConfigに反映
-- [ ] M3 複数レイヤー対応（`--add-dir` 複数 or 簡易Dockerfile）
-- [ ] M4 gzip圧縮 + 正式な OCI Image Layout（`blobs/`, `index.json`, `oci-layout`）
-- [ ] M5 レジストリ push（OCI Distribution API）
+- [x] **M1** single layer → docker-archive tar → `docker load` / `docker run`
+- [x] M2 reflect Cmd/Env/Entrypoint/WorkingDir into the config
+- [ ] M3 multiple layers (`--add-dir` repeated, or a tiny Dockerfile)
+- [ ] M4 gzip compression + proper OCI Image Layout (`blobs/`, `index.json`, `oci-layout`)
+- [ ] M5 push to a registry (OCI Distribution API)
 ```
