@@ -30,7 +30,8 @@ docker run --rm toyimg:latest
 ```
 toy-build-oci build [flags]
 
-  --from-dir DIR     rootfs directory to turn into a layer (required)
+  --from-dir DIR     base rootfs directory (the lowest layer)
+  --layer DIR        additional rootfs directory stacked on top (repeatable)
   --tag NAME:TAG     image tag (default: toyimg:latest)
   --cmd ARG          container Cmd (repeatable)
   --env KEY=VAL      environment variable (repeatable)
@@ -43,6 +44,18 @@ toy-build-oci build [flags]
 ```
 
 The CLI is built with [Cobra](https://github.com/spf13/cobra); run `toy-build-oci build --help` for the generated help.
+
+### Multiple layers
+
+Each `--from-dir` / `--layer` directory becomes one layer, stacked lowest → highest:
+
+```sh
+toy-build-oci build \
+    --from-dir ./testdata/rootfs \
+    --layer ./testdata/overlay \
+    --cmd /hello -o out-multi.tar
+# -> rootfs.diff_ids has two entries; `docker history` shows two stacked layers
+```
 
 ### Output formats
 
@@ -100,7 +113,7 @@ manifest.json            … index referencing the two above
 
 - [x] **M1** single layer → docker-archive tar → `docker load` / `docker run`
 - [x] M2 reflect Cmd/Env/Entrypoint/WorkingDir into the config
-- [ ] M3 multiple layers (`--add-dir` repeated, or a tiny Dockerfile)
+- [x] **M3** multiple layers stacked lowest→highest via repeated `--layer`
 - [x] **M4** gzip compression + proper OCI Image Layout (`blobs/`, `index.json`, `oci-layout`) via `--format oci`
 - [ ] M5 push to a registry (OCI Distribution API)
 ```

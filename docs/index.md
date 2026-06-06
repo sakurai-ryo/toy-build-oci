@@ -130,6 +130,42 @@ Image Config は2つの役割を持つ JSON です。
 - `rootfs.diff_ids` は **下位 → 上位の順**に並んだレイヤーの diff_id。コンテナ起動時はこの順に重ねて1つの rootfs を作ります。
 - `architecture` / `os` が実行環境と合っていないと docker は実行を拒否します（Apple Silicon の Docker Desktop は `linux/arm64`）。
 
+### 複数レイヤーを積む（`--from-dir` + `--layer`）
+
+`toy-build-oci` は `--from-dir` を一番下のレイヤーとし、`--layer DIR` を重ねるたびに
+**1ディレクトリ = 1レイヤー**を上に積みます。
+
+```sh
+toy-build-oci build \
+    --from-dir ./testdata/rootfs \   # 下位レイヤー: /hello（静的バイナリ）
+    --layer ./testdata/overlay \     # 上位レイヤー: /etc/toy-release
+    --cmd /hello -o out-multi.tar
+```
+
+このとき `rootfs.diff_ids` は指定順に並びます。
+
+```json
+"rootfs": {
+  "type": "layers",
+  "diff_ids": [
+    "sha256:e52cbe20...",   // ./testdata/rootfs（下）
+    "sha256:6451f622..."    // ./testdata/overlay（上）
+  ]
+}
+```
+
+実行時、コンテナランタイムはこの順にレイヤーを重ね、上位が下位を上書きする形で1つの
+ファイルシステム（union/overlay）を作ります。`docker history` で積層が確認できます。
+
+```sh
+$ docker history toymulti:latest --format '{{.CreatedBy}}\t{{.Size}}'
+toy-build-oci build --layer ./testdata/overlay   4.1kB     # 上
+toy-build-oci build --layer ./testdata/rootfs    2.33MB    # 下
+```
+
+> ここでの「上書き」は単純な追加・置換まで。上位で**ファイルを削除**する `.wh.`（whiteout）
+> マーカーは本ツールでは未対応です（[§9](#9-本物の-docker--oci-との違い)）。
+
 ### config digest = JSON そのもののハッシュ
 
 この Config JSON 全体の sha256 を **config digest** と呼びます。
@@ -366,16 +402,17 @@ blob を `PUT /v2/<name>/blobs/...`、manifest を `PUT /v2/<name>/manifests/<ta
 
 ### その他の簡略化
 
-- **単一レイヤーのみ**: 本ツールは rootfs を1レイヤーにまとめます。実際の Dockerfile は命令ごとにレイヤーを積みます（→ M3）。
+- **レイヤー = 1ディレクトリ**: 本ツールは `--layer` ごとに1レイヤーを積みます。実際の Dockerfile は
+  `RUN`/`COPY` などの命令ごとに自動でレイヤーを作ります（命令とレイヤーの対応付けは未実装）。
 - **圧縮は gzip 固定**: 実際には zstd（`...tar+zstd`）も使われます。
-- **whiteout 未対応**: 上位レイヤーでファイルを「削除」する `.wh.` マーカーは扱いません。
+- **whiteout 未対応**: 上位レイヤーでファイルを「削除」する `.wh.` マーカーは扱いません（追加・置換のみ）。
 - **annotations/created 等のメタデータ**: 最小限のみ設定しています。
 
 | 観点 | toy-build-oci | 本物の Docker/OCI |
 |------|---------------|-------------------|
 | 出力形式 | docker-archive **/ OCI Image Layout** | 同左 ＋ レジストリ |
 | レイヤー圧縮 | gzip（`oci`）/ 非圧縮（`docker`） | gzip / zstd |
-| レイヤー数 | 常に1 | Dockerfile の命令ごと |
+| レイヤーの単位 | `--layer` ごと（1ディレクトリ=1層） | Dockerfile の命令ごと（自動） |
 | 配布 | `docker load` / `podman load` | registry へ push/pull |
 
 ---
@@ -404,7 +441,7 @@ blob を `PUT /v2/<name>/blobs/...`、manifest を `PUT /v2/<name>/manifests/<ta
 
 - [x] **M1** 単一レイヤー → docker-archive tar → `docker load` / `docker run`
 - [x] **M2** Cmd/Env/Entrypoint/WorkingDir を Config に反映
-- [ ] **M3** 複数レイヤー対応（レイヤーの積層と `diff_ids` の順序を体感）
+- [x] **M3** 複数レイヤー対応（`--layer` で積層、[§3](#3-ステップ2-image-config実行設定とレイヤーの台帳) で解説）
 - [x] **M4** gzip 圧縮 + 正式な OCI Image Layout 出力（`--format oci`、[§8](#8-もう一つの出力形式-oci-image-layoutformat-oci) で解説）
 - [ ] **M5** レジストリ push（OCI Distribution API、[§9](#9-本物の-docker--oci-との違い) の残るギャップ）
 

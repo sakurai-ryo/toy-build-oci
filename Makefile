@@ -3,9 +3,11 @@ ARCH ?= $(shell go env GOARCH)
 TAG  ?= toyimg:latest
 OUT  ?= out.tar
 
-OCI_OUT ?= out-oci.tar
+OCI_OUT   ?= out-oci.tar
+MULTI_OUT ?= out-multi.tar
+MULTI_TAG ?= toymulti:latest
 
-.PHONY: build hello image load run image-oci run-oci demo clean
+.PHONY: build hello image load run image-oci run-oci multi run-multi demo clean
 
 # Build the CLI itself.
 build:
@@ -38,8 +40,19 @@ run-oci: image-oci
 	docker load -i $(OCI_OUT)
 	docker run --rm $(TAG)
 
+# Build a two-layer image: base rootfs (hello) + an overlay layer.
+multi: build hello
+	./bin/toy-build-oci build --from-dir ./testdata/rootfs --layer ./testdata/overlay \
+		--tag $(MULTI_TAG) --cmd /hello --arch $(ARCH) -o $(MULTI_OUT)
+
+# Load the two-layer image and show its stacked layers.
+run-multi: multi
+	docker load -i $(MULTI_OUT)
+	docker run --rm $(MULTI_TAG)
+	docker image inspect $(MULTI_TAG) --format 'layers={{len .RootFS.Layers}}'
+
 # Run the whole flow.
 demo: run
 
 clean:
-	rm -rf bin out.tar out-oci.tar testdata/rootfs/hello
+	rm -rf bin out.tar out-oci.tar out-multi.tar testdata/rootfs/hello
