@@ -3,6 +3,8 @@
 A minimal OCI image builder CLI (written in Go), built to understand how container images are actually assembled.
 It produces a **`docker load` / `podman load`-able tar** (docker-archive format) from a rootfs directory.
 
+📖 **Study notes (GitHub Pages):** <https://sakurai-ryo.github.io/toy-build-oci/> — a step-by-step walkthrough of how an OCI image is built (in Japanese).
+
 ## Quick start
 
 ```sh
