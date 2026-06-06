@@ -38,8 +38,10 @@ toy-build-oci build [flags]
   --workdir DIR      working directory
   --arch ARCH        architecture (default: host GOARCH)
   --os OS            OS (default: linux)
-  -o FILE            output tar path (default: out.tar)
+  -o, --output FILE  output tar path (default: out.tar)
 ```
+
+The CLI is built with [Cobra](https://github.com/spf13/cobra); run `toy-build-oci build --help` for the generated help.
 
 ## How it works (the pieces of an OCI image)
 
