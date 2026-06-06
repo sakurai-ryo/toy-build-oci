@@ -23,9 +23,10 @@ make run
 5. [ステップ4: tar にまとめる（docker-archive レイアウト）](#5-ステップ4-tar-にまとめるdocker-archive-レイアウト)
 6. [docker load → run で何が起きているか](#6-docker-load--run-で何が起きているか)
 7. [digest の連鎖（content-addressable storage）](#7-digest-の連鎖content-addressable-storage)
-8. [本物の Docker / OCI との違い](#8-本物の-docker--oci-との違い)
-9. [用語集](#9-用語集)
-10. [次のステップ](#10-次のステップ)
+8. [もう一つの出力形式: OCI Image Layout（`--format oci`）](#8-もう一つの出力形式-oci-image-layoutformat-oci)
+9. [本物の Docker / OCI との違い](#9-本物の-docker--oci-との違い)
+10. [用語集](#10-用語集)
+11. [次のステップ](#11-次のステップ)
 
 ---
 
@@ -247,53 +248,139 @@ Arch=arm64 OS=linux Cmd=[/hello] Layers=1
 
 ---
 
-## 8. 本物の Docker / OCI との違い
+## 8. もう一つの出力形式: OCI Image Layout（`--format oci`）
 
-`toy-build-oci` は学習用に最短ルートを取っているため、本物とはいくつか差があります。
-**この差分こそが「次に学ぶべきポイント」**です。
+ここまでは `docker save` 互換の **docker-archive** 形式でした。`toy-build-oci` は
+`--format oci` を付けると、OCI 標準の **Image Layout** を tar（oci-archive）として出力します。
+両者を見比べると「Docker独自形式」と「OCI標準形式」の違いがクリアになります。
 
-### (a) docker-archive vs OCI Image Layout
-
-本ツールが出すのは `docker save` 互換の **docker-archive** 形式。
-一方、OCI 標準の **Image Layout** はディレクトリ構造が異なります。
-
-```
-oci-layout              # {"imageLayoutVersion": "1.0.0"}
-index.json              # トップレベルのインデックス（manifest を指す）
-blobs/
-  sha256/
-    <manifest digest>   # Image Manifest（OCI形式）
-    <config digest>     # Image Config
-    <layer digest>      # レイヤー（通常 gzip 圧縮）
+```sh
+toy-build-oci build --from-dir ./testdata/rootfs --tag toyimg:latest \
+    --cmd /hello --format oci -o out-oci.tar
 ```
 
-すべての blob が `blobs/sha256/<digest>` に content-addressable に並ぶのが特徴です（→ ロードマップ M4）。
+> 実装: [`internal/archive/archive.go`](https://github.com/sakurai-ryo/toy-build-oci/blob/main/internal/archive/archive.go) の `WriteOCIArchive`、
+> および [`internal/image/image.go`](https://github.com/sakurai-ryo/toy-build-oci/blob/main/internal/image/image.go) の OCI 型定義
 
-### (b) レイヤーは普通 gzip 圧縮される
+### レイアウト: すべてが `blobs/sha256/<digest>` に並ぶ
 
-配布効率のため、本物のレイヤーは gzip 圧縮されます。このとき digest は2種類登場します。
+```
+$ tar tf out-oci.tar
+blobs/sha256/f692ce0c...   # Image Config
+blobs/sha256/f632ae1c...   # レイヤー（gzip 圧縮）
+blobs/sha256/99c074b3...   # Image Manifest
+index.json                 # トップレベルのインデックス
+oci-layout                 # {"imageLayoutVersion":"1.0.0"}
+```
 
-- `diff_id` … **非圧縮** tar の sha256（Config 内、本ツールが使っているもの）
-- レイヤー blob の digest … **圧縮後** tar.gz の sha256（OCI Manifest 内）
+docker-archive ではファイル名が `<hex>/layer.tar` や `manifest.json` という「役割ベースのパス」でしたが、
+OCI では **すべての blob が中身の digest そのものをファイル名**にして `blobs/sha256/` に並びます。
+これは前章の content addressing をディレクトリ構造として体現したものです。
 
-OCI Manifest はさらに `mediaType`（例 `application/vnd.oci.image.layer.v1.tar+gzip`）でレイヤーの形式を明示します。
+### `index.json` → manifest → config/layers と descriptor で辿る
 
-### (c) レジストリへの push
+入口は `index.json`。ここから **descriptor**（`mediaType` + `digest` + `size` を持つ参照）で下へ辿ります。
+
+```json
+// index.json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [{
+    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+    "digest": "sha256:99c074b3...",
+    "size": 405,
+    "annotations": { "org.opencontainers.image.ref.name": "toyimg:latest" },
+    "platform": { "architecture": "arm64", "os": "linux" }
+  }]
+}
+```
+
+```json
+// blobs/sha256/99c074b3...  (Image Manifest)
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:f692ce0c...",
+    "size": 257
+  },
+  "layers": [{
+    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+    "digest": "sha256:f632ae1c...",
+    "size": 1332284
+  }]
+}
+```
+
+docker-archive の `manifest.json` との違いは明確です。
+
+- **`mediaType`** … 各 blob が「何者か」を明示（config / manifest / gzip レイヤー）。tar の中身を開かずに型が分かる
+- **`size`** … blob のバイト数。レジストリからのダウンロード前に必要量が分かる
+- **`platform` / `annotations`** … index がどの arch/os 向けか、どのタグかを宣言（マルチアーキ対応の土台）
+
+### 1つのレイヤーに2つの digest
+
+OCI 形式で初めて、**1レイヤーに digest が2つ**登場します。
+
+| digest | 何のハッシュか | どこに入るか |
+|--------|----------------|--------------|
+| `diff_id` | **非圧縮** tar の sha256 | Image Config の `rootfs.diff_ids` |
+| レイヤー digest | **gzip 圧縮後** の sha256 | Image Manifest の `layers[].digest` |
+
+```
+            ┌──────────────► diff_id          → Image Config (rootfs.diff_ids)
+ layer.tar ─┤  sha256(非圧縮)
+            │
+            └─ gzip ─► layer.tar.gz ─ sha256 ─► layer digest → Image Manifest (layers[].digest)
+```
+
+- **Config 側が非圧縮 (`diff_id`)** なのは、圧縮方式を変えても rootfs の同一性が保たれるようにするため
+- **Manifest 側が圧縮後** なのは、実際にネットワークを流れる・保存される blob がその圧縮済みバイト列だから
+
+`toy-build-oci` の `Layer.Gzip()` がこの圧縮後 digest を計算しています。Go の gzip は
+ヘッダのタイムスタンプを 0 にするため、**圧縮後 digest も再現可能**です（docker-archive と同じく2回ビルドで完全一致）。
+
+### 読み込み
+
+```sh
+podman load -i out-oci.tar
+# あるいは
+skopeo copy oci-archive:out-oci.tar docker-daemon:toyimg:latest
+# Docker 24+（containerd image store 有効時）なら docker load も可
+docker load -i out-oci.tar
+```
+
+---
+
+## 9. 本物の Docker / OCI との違い
+
+OCI Image Layout（前章）まで実装したことで、形式面での差はかなり埋まりました。
+**残る主な違いは「配布」**です。
+
+### レジストリへの push（残るギャップ）
 
 実運用では tar をやり取りせず、**OCI Distribution API**（HTTP）でレジストリに push/pull します。
 blob を `PUT /v2/<name>/blobs/...`、manifest を `PUT /v2/<name>/manifests/<tag>` で送る流れです（→ ロードマップ M5）。
 
+### その他の簡略化
+
+- **単一レイヤーのみ**: 本ツールは rootfs を1レイヤーにまとめます。実際の Dockerfile は命令ごとにレイヤーを積みます（→ M3）。
+- **圧縮は gzip 固定**: 実際には zstd（`...tar+zstd`）も使われます。
+- **whiteout 未対応**: 上位レイヤーでファイルを「削除」する `.wh.` マーカーは扱いません。
+- **annotations/created 等のメタデータ**: 最小限のみ設定しています。
+
 | 観点 | toy-build-oci | 本物の Docker/OCI |
 |------|---------------|-------------------|
-| 出力形式 | docker-archive tar | OCI Image Layout / レジストリ |
-| レイヤー圧縮 | 非圧縮 | gzip（または zstd） |
-| Manifest | docker の `manifest.json` | OCI Image Manifest + index |
-| mediaType | なし | あり |
-| 配布 | `docker load` | registry へ push/pull |
+| 出力形式 | docker-archive **/ OCI Image Layout** | 同左 ＋ レジストリ |
+| レイヤー圧縮 | gzip（`oci`）/ 非圧縮（`docker`） | gzip / zstd |
+| レイヤー数 | 常に1 | Dockerfile の命令ごと |
+| 配布 | `docker load` / `podman load` | registry へ push/pull |
 
 ---
 
-## 9. 用語集
+## 10. 用語集
 
 | 用語 | 意味 |
 |------|------|
@@ -303,18 +390,22 @@ blob を `PUT /v2/<name>/blobs/...`、manifest を `PUT /v2/<name>/manifests/<ta
 | **config digest** | Config JSON 全体の sha256 |
 | **Manifest** | config とレイヤーを digest で束ねるインデックス |
 | **digest** | コンテンツの sha256（`sha256:<hex>`）。content addressing の鍵 |
-| **docker-archive** | `docker save` 互換の tar 形式。本ツールの出力 |
-| **OCI Image Layout** | OCI 標準のディレクトリ構造（`blobs/`・`index.json`・`oci-layout`） |
+| **descriptor** | `mediaType`+`digest`+`size` を持つ blob への参照。OCI 形式での指し方 |
+| **mediaType** | blob の種別を表す文字列（例 `...image.layer.v1.tar+gzip`） |
+| **index.json** | OCI Image Layout の入口。manifest を descriptor で指す |
+| **oci-layout** | OCI レイアウトであることを示すマーカーファイル |
+| **docker-archive** | `docker save` 互換の tar 形式。`--format docker`（既定） |
+| **OCI Image Layout** | OCI 標準の構造（`blobs/`・`index.json`・`oci-layout`）。`--format oci` |
 | **再現可能ビルド** | mtime 等を固定し、同じ入力から同じ digest を得る手法 |
 
 ---
 
-## 10. 次のステップ
+## 11. 次のステップ
 
 - [x] **M1** 単一レイヤー → docker-archive tar → `docker load` / `docker run`
 - [x] **M2** Cmd/Env/Entrypoint/WorkingDir を Config に反映
 - [ ] **M3** 複数レイヤー対応（レイヤーの積層と `diff_ids` の順序を体感）
-- [ ] **M4** gzip 圧縮 + 正式な OCI Image Layout 出力（本セクション (a)(b) を実装で理解）
-- [ ] **M5** レジストリ push（OCI Distribution API、本セクション (c)）
+- [x] **M4** gzip 圧縮 + 正式な OCI Image Layout 出力（`--format oci`、[§8](#8-もう一つの出力形式-oci-image-layoutformat-oci) で解説）
+- [ ] **M5** レジストリ push（OCI Distribution API、[§9](#9-本物の-docker--oci-との違い) の残るギャップ）
 
 ソース全体は [GitHub リポジトリ](https://github.com/sakurai-ryo/toy-build-oci) を参照してください。

@@ -23,6 +23,7 @@ type buildOptions struct {
 	arch       string
 	osName     string
 	out        string
+	format     string // "docker" (docker-archive) or "oci" (OCI Image Layout)
 }
 
 func newBuildCmd() *cobra.Command {
@@ -48,6 +49,7 @@ func newBuildCmd() *cobra.Command {
 	f.StringVar(&opts.workdir, "workdir", "", "working directory")
 	f.StringVar(&opts.arch, "arch", runtime.GOARCH, "architecture")
 	f.StringVar(&opts.osName, "os", "linux", "OS")
+	f.StringVar(&opts.format, "format", "docker", `output format: "docker" (docker-archive) or "oci" (OCI Image Layout)`)
 	f.StringVarP(&opts.out, "output", "o", "out.tar", "output tar path")
 
 	_ = c.MarkFlagRequired("from-dir")
@@ -56,6 +58,10 @@ func newBuildCmd() *cobra.Command {
 }
 
 func runBuild(opts buildOptions) error {
+	if opts.format != "docker" && opts.format != "oci" {
+		return fmt.Errorf("invalid --format %q (want \"docker\" or \"oci\")", opts.format)
+	}
+
 	// 1. rootfs -> uncompressed layer tar + diff_id
 	l, err := layer.FromDir(opts.fromDir)
 	if err != nil {
@@ -85,20 +91,31 @@ func runBuild(opts buildOptions) error {
 		return fmt.Errorf("build config: %w", err)
 	}
 
-	// 3. Write it out as a docker-archive tar.
+	// 3. Write it out in the requested format.
 	f, err := os.Create(opts.out)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err := archive.WriteDockerArchive(f, cfgData, cfgHex, []*layer.Layer{l}, []string{opts.tag}); err != nil {
-		return fmt.Errorf("write tar: %w", err)
+
+	switch opts.format {
+	case "docker":
+		err = archive.WriteDockerArchive(f, cfgData, cfgHex, []*layer.Layer{l}, []string{opts.tag})
+	case "oci":
+		err = archive.WriteOCIArchive(f, cfgData, cfgHex, []*layer.Layer{l}, opts.tag, opts.arch, opts.osName)
+	}
+	if err != nil {
+		return fmt.Errorf("write %s archive: %w", opts.format, err)
 	}
 
-	fmt.Printf("built %s\n", opts.tag)
+	fmt.Printf("built %s (format: %s)\n", opts.tag, opts.format)
 	fmt.Printf("  layer diff_id : %s\n", l.DiffID)
 	fmt.Printf("  config digest : sha256:%s\n", cfgHex)
 	fmt.Printf("  output        : %s\n", opts.out)
-	fmt.Printf("\nload with: docker load -i %s\n", opts.out)
+	if opts.format == "oci" {
+		fmt.Printf("\nload with: podman load -i %s   (or: skopeo copy oci-archive:%s docker-daemon:%s)\n", opts.out, opts.out, opts.tag)
+	} else {
+		fmt.Printf("\nload with: docker load -i %s\n", opts.out)
+	}
 	return nil
 }

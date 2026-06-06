@@ -38,10 +38,29 @@ toy-build-oci build [flags]
   --workdir DIR      working directory
   --arch ARCH        architecture (default: host GOARCH)
   --os OS            OS (default: linux)
+  --format FORMAT    "docker" (docker-archive) or "oci" (OCI Image Layout) (default: docker)
   -o, --output FILE  output tar path (default: out.tar)
 ```
 
 The CLI is built with [Cobra](https://github.com/spf13/cobra); run `toy-build-oci build --help` for the generated help.
+
+### Output formats
+
+```sh
+# docker-archive (uncompressed layers, classic `docker save` layout)
+toy-build-oci build --from-dir ./testdata/rootfs --cmd /hello -o out.tar
+
+# OCI Image Layout (gzip-compressed layers, blobs/ + index.json + oci-layout)
+toy-build-oci build --from-dir ./testdata/rootfs --cmd /hello --format oci -o out-oci.tar
+podman load -i out-oci.tar     # or: docker load (Docker 24+), skopeo copy oci-archive:out-oci.tar ...
+```
+
+| | `--format docker` | `--format oci` |
+|---|---|---|
+| Layout | `manifest.json` + `<hex>/layer.tar` | `oci-layout` + `index.json` + `blobs/sha256/<digest>` |
+| Layers | uncompressed | gzip-compressed |
+| Descriptors | implicit (paths) | typed (mediaType + size + digest) |
+| Loaders | `docker load` / `podman load` | `podman load`, `skopeo`, `docker load` (24+) |
 
 ## How it works (the pieces of an OCI image)
 
@@ -82,6 +101,6 @@ manifest.json            … index referencing the two above
 - [x] **M1** single layer → docker-archive tar → `docker load` / `docker run`
 - [x] M2 reflect Cmd/Env/Entrypoint/WorkingDir into the config
 - [ ] M3 multiple layers (`--add-dir` repeated, or a tiny Dockerfile)
-- [ ] M4 gzip compression + proper OCI Image Layout (`blobs/`, `index.json`, `oci-layout`)
+- [x] **M4** gzip compression + proper OCI Image Layout (`blobs/`, `index.json`, `oci-layout`) via `--format oci`
 - [ ] M5 push to a registry (OCI Distribution API)
 ```

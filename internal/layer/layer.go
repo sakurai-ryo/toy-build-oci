@@ -7,6 +7,7 @@ package layer
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -118,6 +119,29 @@ func FromDir(srcDir string) (*Layer, error) {
 		TarBytes: buf.Bytes(),
 		DiffID:   "sha256:" + hex.EncodeToString(sum[:]),
 	}, nil
+}
+
+// Gzip compresses the layer tar and returns the gzip bytes, their sha256
+// (the *compressed* digest used in an OCI manifest descriptor), and the size.
+//
+// Note the two digests for one layer:
+//   - DiffID  : sha256 of the uncompressed tar (goes in the Image Config)
+//   - this one: sha256 of the gzip blob         (goes in the OCI manifest)
+//
+// Go's gzip writer emits a deterministic header (MTIME=0, OS=unknown), so the
+// compressed digest is reproducible just like DiffID.
+func (l *Layer) Gzip() (data []byte, digest string, size int64, err error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err = zw.Write(l.TarBytes); err != nil {
+		return nil, "", 0, err
+	}
+	if err = zw.Close(); err != nil {
+		return nil, "", 0, err
+	}
+	data = buf.Bytes()
+	sum := sha256.Sum256(data)
+	return data, "sha256:" + hex.EncodeToString(sum[:]), int64(len(data)), nil
 }
 
 func copyFile(w io.Writer, path string) error {

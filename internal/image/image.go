@@ -62,3 +62,59 @@ type DockerManifestEntry struct {
 	RepoTags []string `json:"RepoTags"` // e.g. ["toyimg:latest"]
 	Layers   []string `json:"Layers"`   // paths to each layer.tar inside the tar (lowest -> highest)
 }
+
+// --- OCI Image Layout types --------------------------------------------------
+//
+// Unlike the docker-archive above, the OCI format puts every blob under
+// blobs/sha256/<digest> and uses typed descriptors with explicit mediaType
+// and size. Layers here are usually gzip-compressed, so a layer descriptor's
+// digest is the *compressed* digest (while the config's diff_ids stay
+// uncompressed).
+
+// Media types defined by the OCI image spec.
+const (
+	MediaTypeImageManifest  = "application/vnd.oci.image.manifest.v1+json"
+	MediaTypeImageIndex     = "application/vnd.oci.image.index.v1+json"
+	MediaTypeImageConfig    = "application/vnd.oci.image.config.v1+json"
+	MediaTypeImageLayerGzip = "application/vnd.oci.image.layer.v1.tar+gzip"
+
+	// AnnotationRefName is the well-known annotation that carries the tag.
+	AnnotationRefName = "org.opencontainers.image.ref.name"
+)
+
+// Descriptor points at a content-addressable blob (config, layer, or manifest).
+type Descriptor struct {
+	MediaType   string            `json:"mediaType"`
+	Digest      string            `json:"digest"` // "sha256:<hex>" of the blob bytes
+	Size        int64             `json:"size"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Platform    *Platform         `json:"platform,omitempty"`
+}
+
+// Platform describes which arch/os a manifest targets (used in the index).
+type Platform struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+}
+
+// Manifest is an OCI Image Manifest: it ties one config to its layers,
+// each referenced by a typed descriptor.
+type Manifest struct {
+	SchemaVersion int          `json:"schemaVersion"` // always 2
+	MediaType     string       `json:"mediaType"`
+	Config        Descriptor   `json:"config"`
+	Layers        []Descriptor `json:"layers"`
+}
+
+// Index is the top-level OCI Image Index (index.json). It lists the
+// manifests contained in the layout, here just one.
+type Index struct {
+	SchemaVersion int          `json:"schemaVersion"` // always 2
+	MediaType     string       `json:"mediaType"`
+	Manifests     []Descriptor `json:"manifests"`
+}
+
+// Layout is the contents of the oci-layout marker file.
+type Layout struct {
+	ImageLayoutVersion string `json:"imageLayoutVersion"`
+}

@@ -3,7 +3,9 @@ ARCH ?= $(shell go env GOARCH)
 TAG  ?= toyimg:latest
 OUT  ?= out.tar
 
-.PHONY: build hello image load run demo clean
+OCI_OUT ?= out-oci.tar
+
+.PHONY: build hello image load run image-oci run-oci demo clean
 
 # Build the CLI itself.
 build:
@@ -13,7 +15,7 @@ build:
 hello:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -o testdata/rootfs/hello ./hello
 
-# Produce the image tar containing hello.
+# Produce a docker-archive image tar containing hello.
 image: build hello
 	./bin/toy-build-oci build --from-dir ./testdata/rootfs --tag $(TAG) \
 		--cmd /hello --arch $(ARCH) -o $(OUT)
@@ -26,8 +28,18 @@ load: image
 run: load
 	docker run --rm $(TAG)
 
+# Produce an OCI Image Layout tar (gzip-compressed layers) containing hello.
+image-oci: build hello
+	./bin/toy-build-oci build --from-dir ./testdata/rootfs --tag $(TAG) \
+		--cmd /hello --arch $(ARCH) --format oci -o $(OCI_OUT)
+
+# Load the OCI archive and run it (Docker 24+/Podman can load OCI archives).
+run-oci: image-oci
+	docker load -i $(OCI_OUT)
+	docker run --rm $(TAG)
+
 # Run the whole flow.
 demo: run
 
 clean:
-	rm -rf bin out.tar testdata/rootfs/hello
+	rm -rf bin out.tar out-oci.tar testdata/rootfs/hello
